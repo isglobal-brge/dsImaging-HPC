@@ -7,18 +7,7 @@
 #' @examples
 #' source_dsImaging_python_functions()
 source_dsImaging_python_functions <- function() {
-  # Specify the conda environment to use
-  message("a")
-  a <- reticulate::conda_list("/root/.local/share/r-miniconda")
-  a
-  message(a)
-
-  # reticulate::use_condaenv(condaenv = "rock-python")
-
-  # Locate the Python script within the dsImaging package
+  reticulate::use_condaenv(conda = "/var/lib/rock/python/bin/conda", condaenv = "rock-python")
   script_path <- system.file("python", "functions.py", package = "dsImaging")
-  script_path
-
-  # Source the Python script
   reticulate::source_python(script_path, envir = parent.frame(), convert = TRUE)
 }
