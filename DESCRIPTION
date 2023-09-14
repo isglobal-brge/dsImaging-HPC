@@ -11,4 +11,7 @@ Depends:
   dsBase (>= 6.2.0),
   resourcer
 AssignMethods:
-  source_dsImaging_python_functions
+  source_dsImaging_python_functions,
+  process_single_scan_R,
+  convert_dicom_to_nifti_R,
+  calculate_radiomic_features_R

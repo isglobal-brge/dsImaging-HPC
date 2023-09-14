@@ -101,3 +101,80 @@ def get_and_save_masks(series_path):
         # in DICOM format.
         writer.SetFileName(series_path + "_mask/" + str(id) + ".dcm")
         writer.Execute(image_slice)
+    return series_path + "_mask/"
+
+def lugmask_nifti(path):
+    try:
+        im = sitk.ReadImage(path)
+        segmentation, masked_img = generate_mask(im)
+        segmentation = sitk.GetImageFromArray(segmentation)
+        segmentation.CopyInformation(im)
+        sitk.WriteImage(segmentation, path[:-7] + '_mask.nii.gz')
+        return path[:-7] + '_mask.nii.gz'
+    except:
+        print("An exception occurred while processing file: " + path)
+        return None
+
+import os
+import tarfile
+import shutil
+import dicom2nifti
+import pandas as pd
+
+def convert_dicom_to_nifti(image_path):
+
+    # Check if directories exist
+    if not os.path.exists(image_path):
+        raise ValueError("Provided path do not exist or is not directories.")
+
+    # Define output directories
+    output_image_nifti = os.path.join(os.path.dirname(image_path[:-7]), os.path.basename(image_path[:-7]) + ".nii.gz")
+
+    aux_directory = image_path[:-7] + "/aux"
+
+    # Decompress image tarball
+    with tarfile.open(image_path, "r:gz") as tar:
+        tar.extractall(aux_directory + "/image/")
+    print(aux_directory + "/image/")
+    print(output_image_nifti)
+    dicom2nifti.dicom_series_to_nifti(aux_directory + "/image/" + os.path.basename(image_path[:-7]), output_image_nifti)
+    
+    return output_image_nifti
+
+from radiomics import featureextractor 
+
+# Predefined parameter configurations
+RADIOMICS_CONFIGS = {
+    "default": {
+        'setting': {
+            'binWidth': 25,
+            'label': 1,
+            'interpolator': 'sitkBSpline',
+            'resampledPixelSpacing': [1, 1, 1],
+            'weightingNorm': None,
+            'correctMask': True,
+            'minimumROIDimensions': 3
+        },
+        'imageType': {
+            'Original': {},
+            'LoG': {'sigma': [1.0, 2.0, 3.0, 4.0, 5.0]},
+            'Wavelet': {}
+        },
+        'featureClass': {
+            'shape': {},
+            'firstorder': []
+#             'glcm': {},
+#             'glrlm': {},
+#             'glszm': {},
+#             'gldm': {},
+#             'ngtdm': {}
+        }
+    }
+    # ... Add more configurations as needed
+}
+
+def calculate_radiomic_features(path_to_original_image, path_to_mask, config="default"):
+    settings = RADIOMICS_CONFIGS.get(config, RADIOMICS_CONFIGS["default"])  # use the default if the config name is not recognized
+    extractor = featureextractor.RadiomicsFeatureExtractor(**settings)
+    result = extractor.execute(path_to_original_image, path_to_mask)
+    return result
