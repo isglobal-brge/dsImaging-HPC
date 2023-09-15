@@ -14,8 +14,7 @@
 #' }
 #' @export
 calculate_radiomic_features_R <- function(image, mask, config = "default") {
-  print(image)
-  print(mask)
   results <- reticulate::py$calculate_radiomic_features(image, mask, config)
+  results <- as.data.frame(results)
   return(results)
 }

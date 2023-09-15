@@ -161,8 +161,8 @@ RADIOMICS_CONFIGS = {
             'Wavelet': {}
         },
         'featureClass': {
-            'shape': {},
-            'firstorder': []
+#             'shape': {},
+            'firstorder': []#,
 #             'glcm': {},
 #             'glrlm': {},
 #             'glszm': {},
@@ -177,4 +177,14 @@ def calculate_radiomic_features(path_to_original_image, path_to_mask, config="de
     settings = RADIOMICS_CONFIGS.get(config, RADIOMICS_CONFIGS["default"])  # use the default if the config name is not recognized
     extractor = featureextractor.RadiomicsFeatureExtractor(**settings)
     result = extractor.execute(path_to_original_image, path_to_mask)
-    return result
+    # Convert the result to a flattened structure
+    flattened_result = {}
+    for key, value in result.items():
+        if isinstance(value, np.ndarray) and value.ndim == 0:  # Check if it's a 0-d array
+            flattened_result[key] = value.item()  # Convert numpy scalar to Python native type
+        elif isinstance(value, (list, tuple, np.ndarray)):
+            for i, subvalue in enumerate(value):
+                flattened_result[f"{key}_{i}"] = subvalue
+        else:
+            flattened_result[key] = value
+    return flattened_result
