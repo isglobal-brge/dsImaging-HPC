@@ -4,18 +4,10 @@
 \alias{calculate_radiomic_features_R}
 \title{Calculate Radiomic Features}
 \usage{
-calculate_radiomic_features_R(
-  path_to_original_image,
-  path_to_mask,
-  path_to_parameters
-)
+calculate_radiomic_features_R(image, mask, config = "default")
 }
 \arguments{
-\item{path_to_original_image}{A character string specifying the path to the original image.}
-
-\item{path_to_mask}{A character string specifying the path to the image mask.}
-
-\item{path_to_parameters}{A character string specifying the path to the parameter file for feature extraction.}
+\item{config}{A character string specifying the configuration to use. Available options: "default", "config2", ...}
 }
 \value{
 A list of computed radiomic features.

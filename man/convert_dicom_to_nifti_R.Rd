@@ -4,7 +4,7 @@
 \alias{convert_dicom_to_nifti_R}
 \title{Convert DICOM to NIFTI}
 \usage{
-convert_dicom_to_nifti_R(paths)
+convert_dicom_to_nifti_R(path)
 }
 \arguments{
 \item{paths}{Output of \code{process_single_scan_R}.}

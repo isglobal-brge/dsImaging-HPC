@@ -13,5 +13,6 @@ Depends:
 AssignMethods:
   source_dsImaging_python_functions,
   process_single_scan_R,
-  convert_dicom_to_nifti_R,
+  convert_dicom_to_nifti_R
+AggregateMethods:
   calculate_radiomic_features_R
