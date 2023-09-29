@@ -6,8 +6,8 @@
 #' @export
 #' @examples
 #' source_dsImaging_python_functions()
-source_dsImaging_python_functions <- function() {
-  reticulate::use_condaenv(conda = "/var/lib/rock/python/bin/conda", condaenv = "rock-python")
+source_dsImaging_python_functions <- function(path = "/var/lib/rock/python/bin/conda", condaenv = "rock-python") {
+  reticulate::use_condaenv(conda = path, condaenv = condaenv)
   script_path <- system.file("python", "functions.py", package = "dsImaging")
   reticulate::source_python(script_path, envir = parent.frame(), convert = TRUE)
 }
