@@ -1,7 +1,11 @@
 Package: dsImaging
-Title: DataSHIELD server site image functions.
+Title: Server-Side DataSHIELD Medical Imaging Analysis
 Version: 0.0.1
-Description: What the package does (one paragraph).
+Authors@R:
+    c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
+      person("Xavier", "Escribà Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
+      person("Juan R", "González", , "juanr.gonzalez@isglobal.org", role = c("aut")))
+Description: This package provides server-side functions for medical imaging analysis using DataSHIELD.
 License: MIT
 Encoding: UTF-8
 LazyData: true
