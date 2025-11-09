@@ -1,0 +1,29 @@
+{
+  "name": "lungmask",
+  "version": "1.0.0",
+  "description": "Apply lung segmentation mask to a CT image using deep learning. Takes an image file (NIfTI, DICOM, or other SimpleITK-supported formats) as input and returns a binary lung mask.",
+  "command": "python3",
+  "script_path": "main.py",
+  "parameters": [
+    {
+      "name": "model",
+      "type": "string",
+      "required": false,
+      "description": "Lungmask model to use (optional, default: 'R231'). Options: 'R231', 'LTRCLobes', 'R231CovidWeb'",
+      "default": "R231"
+    },
+    {
+      "name": "force_cpu",
+      "type": "boolean",
+      "required": false,
+      "description": "Force CPU usage even if GPU is available (optional, default: false)",
+      "default": false
+    }
+  ],
+  "input_modes": {
+    "supports_no_input": false,
+    "supports_single_file": true,
+    "supports_multi_file": false
+  }
+}
+
