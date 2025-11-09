@@ -1,12 +1,66 @@
 #!/usr/bin/env python3
 """
-Lungmask segmentation method.
+Lungmask Segmentation Method
 
-This script applies lung segmentation to CT images using the lungmask library.
-It reads an input image file, applies the segmentation model, and returns the mask.
+This script performs automatic lung segmentation on chest CT images using deep learning
+models from the lungmask library. It automatically identifies and segments lung regions
+from medical imaging data.
+
+INPUT REQUIREMENTS:
+- Input must be a 3D CT image volume
+- Supported formats: NIfTI (.nii, .nii.gz), DICOM (directory or single file), 
+  NRRD (.nrrd), MetaImage (.mha, .mhd), Analyze, and other SimpleITK-supported formats
+- Image must be readable by SimpleITK library
+- Expected image dimension: 3D (width x height x depth)
+
+OUTPUT:
+- Returns a JSON response containing:
+  - status: "success" or "error"
+  - data.mask_file: Path to the generated lung mask file (NIfTI format)
+  - data.mask_size_bytes: Size of the mask file in bytes
+  - data.statistics: Detailed statistics including:
+    * total_voxels: Total number of voxels in the mask
+    * lung_voxels: Number of voxels identified as lung tissue
+    * background_voxels: Number of background voxels
+    * lung_volume_mm3: Total lung volume in cubic millimeters
+    * lung_volume_cm3: Total lung volume in cubic centimeters
+    * unique_labels: List of unique label values in the mask
+    * mask_size: Dimensions of the mask [width, height, depth]
+    * spacing_mm: Voxel spacing in millimeters [x, y, z]
+  - metadata: Processing metadata including model used, input image info, etc.
+
+PARAMETERS:
+- model (string, optional): Segmentation model to use
+  * "R231" (default): Standard lung segmentation model, good for general use
+  * "LTRCLobes": Lung and lobe segmentation, provides more detailed anatomical regions
+  * "R231CovidWeb": Optimized for COVID-19 analysis and lung pathology detection
+- force_cpu (boolean, optional): Force CPU processing even if GPU is available
+  * false (default): Use GPU if available for faster processing
+  * true: Force CPU usage (useful for GPU memory issues or consistency)
+
+ERROR HANDLING:
+The script includes comprehensive error handling for:
+- Missing or invalid input files
+- Unsupported image formats
+- Image dimension mismatches (expects 3D images)
+- GPU/CPU processing errors
+- Model loading failures
+- File I/O errors
+All errors are returned as JSON with detailed error messages.
+
+DEPENDENCIES:
+- SimpleITK: For medical image I/O and processing
+- lungmask: Deep learning lung segmentation library
+- numpy: For array operations
+- torch: Required by lungmask for model inference
 
 Usage:
     python3 main.py <input_file> <metadata_file> <params_file>
+
+Where:
+    input_file: Path to the input CT image file
+    metadata_file: Path to JSON file containing metadata about the input
+    params_file: Path to JSON file containing method parameters
 """
 
 import sys
