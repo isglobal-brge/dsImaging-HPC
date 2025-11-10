@@ -67,13 +67,16 @@ import sys
 import os
 import json
 import traceback
-import tempfile
-import shutil
 from pathlib import Path
+import logging
+
+# Suppress lungmask logging to stdout (we only want JSON output)
+logging.getLogger('lungmask').setLevel(logging.ERROR)
 
 import SimpleITK as sitk
 import numpy as np
 from lungmask import mask as lungmask_mask
+from lungmask.mask import LMInferer
 
 
 def validate_file_exists(file_path, file_description):
@@ -133,14 +136,34 @@ def read_image_file(image_path):
 
 
 def apply_lungmask(image, model_name="R231", force_cpu=False):
-    """Apply lungmask segmentation to an image."""
+    """Apply lungmask segmentation to an image.
+    
+    Args:
+        image: SimpleITK Image object (required)
+        model_name: Model name to use
+        force_cpu: Whether to force CPU usage
+    """
     try:
         # Validate model name
         valid_models = ["R231", "LTRCLobes", "R231CovidWeb"]
         if model_name not in valid_models:
             return None, f"Invalid model name '{model_name}'. Valid options: {', '.join(valid_models)}"
         
-        # Apply lungmask
+        # Validate image is a SimpleITK Image
+        if not isinstance(image, sitk.Image):
+            return None, f"Image must be a SimpleITK Image object, got {type(image).__name__}"
+        
+        # Store image metadata for later
+        image_spacing = image.GetSpacing()
+        image_origin = image.GetOrigin()
+        image_direction = image.GetDirection()
+        
+        # Use LMInferer directly (lungmask.apply() is deprecated and has bugs)
+        # LMInferer accepts modelname in constructor, not as parameter to apply()
+        # Redirect lungmask stdout messages to stderr to avoid interfering with JSON output
+        from contextlib import redirect_stdout
+        import io
+        
         try:
             if force_cpu:
                 # Force CPU by setting CUDA_VISIBLE_DEVICES
@@ -148,14 +171,30 @@ def apply_lungmask(image, model_name="R231", force_cpu=False):
                 original_cuda = os_module.environ.get('CUDA_VISIBLE_DEVICES')
                 os_module.environ['CUDA_VISIBLE_DEVICES'] = ''
                 try:
-                    mask = lungmask_mask.apply(image, model=model_name)
+                    # Redirect stdout to stderr for lungmask output
+                    f = io.StringIO()
+                    with redirect_stdout(f):
+                        inferer = LMInferer(modelname=model_name, force_cpu=True)
+                        mask = inferer.apply(image)
+                    # Print lungmask messages to stderr
+                    lungmask_output = f.getvalue()
+                    if lungmask_output:
+                        print(lungmask_output, file=sys.stderr, flush=True)
                 finally:
                     if original_cuda is not None:
                         os_module.environ['CUDA_VISIBLE_DEVICES'] = original_cuda
                     else:
                         os_module.environ.pop('CUDA_VISIBLE_DEVICES', None)
             else:
-                mask = lungmask_mask.apply(image, model=model_name)
+                # Redirect stdout to stderr for lungmask output
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    inferer = LMInferer(modelname=model_name, force_cpu=False)
+                    mask = inferer.apply(image)
+                # Print lungmask messages to stderr
+                lungmask_output = f.getvalue()
+                if lungmask_output:
+                    print(lungmask_output, file=sys.stderr, flush=True)
         except RuntimeError as e:
             if "CUDA" in str(e) or "GPU" in str(e):
                 return None, f"GPU error: {str(e)}. Try setting force_cpu=true parameter."
@@ -167,6 +206,22 @@ def apply_lungmask(image, model_name="R231", force_cpu=False):
         if mask is None:
             return None, "Lungmask returned None (no mask generated)"
         
+        # Convert mask to SimpleITK Image (it should be a numpy array)
+        if isinstance(mask, np.ndarray):
+            mask_sitk = sitk.GetImageFromArray(mask)
+            # Restore image metadata
+            mask_sitk.SetSpacing(image_spacing)
+            mask_sitk.SetOrigin(image_origin)
+            mask_sitk.SetDirection(image_direction)
+            mask = mask_sitk
+        elif isinstance(mask, sitk.Image):
+            # Already a SimpleITK Image, ensure metadata matches
+            mask.SetSpacing(image_spacing)
+            mask.SetOrigin(image_origin)
+            mask.SetDirection(image_direction)
+        else:
+            return None, f"Lungmask returned unexpected type: {type(mask).__name__}"
+        
         # Validate mask dimensions match image
         if mask.GetSize() != image.GetSize():
             return None, f"Mask size {mask.GetSize()} does not match image size {image.GetSize()}"
@@ -175,33 +230,6 @@ def apply_lungmask(image, model_name="R231", force_cpu=False):
         
     except Exception as e:
         return None, f"Unexpected error applying lungmask: {str(e)}"
-
-
-def save_mask(mask, output_dir, original_image_path):
-    """Save the mask to a file."""
-    try:
-        # Create output filename based on input filename
-        input_basename = Path(original_image_path).stem
-        # Remove .nii if present (for .nii.gz files)
-        if input_basename.endswith('.nii'):
-            input_basename = input_basename[:-4]
-        
-        output_path = os.path.join(output_dir, f"{input_basename}_lungmask.nii.gz")
-        
-        # Write the mask
-        try:
-            sitk.WriteImage(mask, output_path)
-        except Exception as e:
-            return None, f"Failed to write mask to file: {str(e)}"
-        
-        # Validate file was created
-        if not os.path.exists(output_path):
-            return None, "Mask file was not created successfully"
-        
-        return output_path, None
-        
-    except Exception as e:
-        return None, f"Unexpected error saving mask: {str(e)}"
 
 
 def get_mask_statistics(mask):
@@ -329,7 +357,12 @@ def main():
             print(json.dumps(result), flush=True)
             sys.exit(1)
         
-        # Apply lungmask
+        # Store image info for later use
+        image_size = image.GetSize()
+        image_spacing = image.GetSpacing()
+        
+        # Apply lungmask - pass the SimpleITK Image object directly
+        # lungmask.apply() accepts SimpleITK.Image or numpy.ndarray
         mask, error = apply_lungmask(image, model_name=model_name, force_cpu=force_cpu)
         if error:
             result = {
@@ -339,59 +372,104 @@ def main():
             print(json.dumps(result), flush=True)
             sys.exit(1)
         
-        # Create temporary directory for output
-        output_dir = tempfile.mkdtemp(prefix="lungmask_")
+        # Calculate statistics
+        stats, error = get_mask_statistics(mask)
+        if error:
+            # Non-fatal error, continue without stats
+            stats = {}
+        
+        # Load metadata
+        metadata, error = load_json_file(metadata_file, "metadata file")
+        if error:
+            # Non-fatal error, use empty metadata
+            metadata = {}
+        
+        # Convert mask directly to base64 using temporary file that's auto-deleted
+        # SimpleITK requires a file path, so we use NamedTemporaryFile which auto-deletes
+        mask_base64 = None
+        mask_size_bytes = 0
         try:
-            # Save mask
-            mask_path, error = save_mask(mask, output_dir, input_file)
-            if error:
-                result = {
-                    "status": "error",
-                    "message": error
+            import base64
+            import tempfile
+            
+            # Use NamedTemporaryFile which auto-deletes when closed
+            # This avoids leaving files on disk
+            with tempfile.NamedTemporaryFile(suffix='.nii.gz', delete=True) as tmp_file:
+                tmp_path = tmp_file.name
+                
+                # Write mask to temporary file
+                sitk.WriteImage(mask, tmp_path)
+                
+                # Read the file into memory
+                with open(tmp_path, 'rb') as f:
+                    mask_bytes = f.read()
+                
+                mask_size_bytes = len(mask_bytes)
+                
+                # Check size limit (50MB base64 ≈ 37MB raw)
+                max_size_bytes = 50 * 1024 * 1024  # 50MB
+                if mask_size_bytes * 1.4 < max_size_bytes:
+                    mask_base64 = base64.b64encode(mask_bytes).decode('utf-8')
+                else:
+                    # File too large, skip base64 encoding
+                    mask_base64 = None
+                    print(f"Warning: Mask too large for base64 encoding ({mask_size_bytes / (1024*1024):.2f} MB)", 
+                          file=sys.stderr)
+                # File is automatically deleted when exiting the 'with' block
+        except Exception as e:
+            # Non-fatal error, continue without base64 encoding
+            print(f"Warning: Could not encode mask as base64: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            mask_base64 = None
+        
+        # Get mask metadata for radiomics (spacing, origin, direction)
+        mask_spacing = list(mask.GetSpacing())
+        mask_origin = list(mask.GetOrigin())
+        mask_direction = list(mask.GetDirection())
+        mask_size = list(mask.GetSize())
+        
+        # Create success result with all necessary information for radiomics
+        result = {
+            "status": "success",
+            "message": f"Successfully generated lung mask using model '{model_name}'",
+            "data": {
+                "mask_base64": mask_base64,  # Mask image encoded in base64 (NIfTI format)
+                "mask_size_bytes": mask_size_bytes,  # Size of mask in bytes
+                "mask_format": "nii.gz",  # Format of the mask
+                "statistics": stats,  # Basic statistics
+                # Mask metadata for radiomics
+                "mask_metadata": {
+                    "size": mask_size,  # [width, height, depth] in voxels
+                    "spacing_mm": mask_spacing,  # [x, y, z] spacing in mm (critical for radiomics)
+                    "origin_mm": mask_origin,  # [x, y, z] origin in mm
+                    "direction": mask_direction  # Direction cosine matrix (9 elements)
                 }
-                print(json.dumps(result), flush=True)
-                sys.exit(1)
-            
-            # Calculate statistics
-            stats, error = get_mask_statistics(mask)
-            if error:
-                # Non-fatal error, continue without stats
-                stats = {}
-            
-            # Load metadata
-            metadata, error = load_json_file(metadata_file, "metadata file")
-            if error:
-                # Non-fatal error, use empty metadata
-                metadata = {}
-            
-            # Create success result
-            result = {
-                "status": "success",
-                "message": f"Successfully generated lung mask using model '{model_name}'",
-                "data": {
-                    "mask_file": mask_path,
-                    "mask_size_bytes": os.path.getsize(mask_path),
-                    "statistics": stats
-                },
-                "metadata": {
-                    "method": "lungmask",
-                    "model": model_name,
-                    "force_cpu": force_cpu,
-                    "input_file": input_file,
-                    "input_image_size": list(image.GetSize()),
-                    "input_image_spacing": list(image.GetSpacing()),
-                    "original_metadata": metadata
-                },
-                "parameters_applied": params
-            }
-            
-            # Output as JSON
-            print(json.dumps(result, indent=None, separators=(',', ':')), flush=True)
-            
-            return True
-            
-        finally:
-            pass
+            },
+            "metadata": {
+                "method": "lungmask",
+                "model": model_name,
+                "force_cpu": force_cpu,
+                "input_file": input_file,
+                # Input image metadata (needed for radiomics to ensure alignment)
+                "input_image_size": list(image_size),
+                "input_image_spacing": list(image_spacing),
+                "input_image_origin": list(image.GetOrigin()),
+                "input_image_direction": list(image.GetDirection()),
+                "original_metadata": metadata
+            },
+            "parameters_applied": params
+        }
+        
+        # Output as JSON only (suppress any other output)
+        # Clear any buffered stdout first
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        # Output JSON to stdout - this should be the only output
+        json_output = json.dumps(result, indent=None, separators=(',', ':'))
+        print(json_output, flush=True)
+        
+        return True
         
     except KeyboardInterrupt:
         result = {
