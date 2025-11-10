@@ -258,6 +258,35 @@ def main():
                 }
                 print(json.dumps(result), flush=True)
                 sys.exit(1)
+            
+            # Check if the mask file contains base64-encoded content (from $ref extraction)
+            # When $ref extracts a base64 string from JSON, it's saved as a text file
+            try:
+                with open(mask_path, 'rb') as f:
+                    first_bytes = f.read(100)
+                    # Check if file starts with base64-like content (text, not binary NIfTI)
+                    # NIfTI files start with specific magic numbers, base64 strings don't
+                    if len(first_bytes) > 0 and first_bytes[0] not in [0x00, 0x1E, 0x5C]:  # Common NIfTI magic numbers
+                        # Try to read as text and decode base64
+                        with open(mask_path, 'r', encoding='utf-8') as text_file:
+                            content = text_file.read().strip()
+                            # Check if it looks like base64 (alphanumeric, +, /, =)
+                            if all(c.isalnum() or c in '+/=' for c in content) and len(content) > 100:
+                                # Likely base64, decode it
+                                try:
+                                    mask_bytes = base64.b64decode(content)
+                                    # Create temporary file with decoded content
+                                    with tempfile.NamedTemporaryFile(suffix='.nii.gz', delete=False) as tmp_file:
+                                        tmp_path = tmp_file.name
+                                        tmp_file.write(mask_bytes)
+                                    mask_path = tmp_path
+                                    mask_temp_file = tmp_path
+                                except Exception as e:
+                                    # Not valid base64, continue with original file
+                                    pass
+            except Exception:
+                # If reading fails, continue with original file path
+                pass
         
         # Validate mask file exists
         exists, error = validate_file_exists(mask_path, "Mask file")
