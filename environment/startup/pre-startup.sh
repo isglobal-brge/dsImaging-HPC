@@ -1,10 +1,18 @@
 #!/bin/bash
+# Pre-startup script
+# This script runs AFTER all dependencies are installed but BEFORE the container is considered "up"
+# Use this for operations that need dependencies (Python, R, etc.) but must complete before services start
+# Examples:
+#   - Pre-downloading models or large files
+#   - Running database migrations
+#   - Validating configuration
+#   - Pre-compiling code
+#
+# If this script fails, the container startup will abort
+#
+# This script is OPTIONAL - if it doesn't exist or is empty, startup will continue normally
 
-# Startup script for additional container configuration
-# This script runs automatically when the container starts if it exists
-# Place any pre-loading, downloads, or additional setup operations here
-
-# Note: We don't use 'set -e' here because we want to continue even if some downloads fail
+set -e  # Abort on any error
 
 # Colors for output
 GREEN="\033[1;32m"
@@ -12,7 +20,7 @@ YELLOW="\033[1;33m"
 CYAN="\033[1;36m"
 NC="\033[0m" # No Color
 
-echo -e "${CYAN}>> Running startup script...${NC}"
+echo -e "${CYAN}>> Running pre-startup script...${NC}"
 
 # Pre-load lungmask models to avoid downloading during job execution
 # This ensures models are available even if the container loses internet access during runtime
@@ -20,8 +28,8 @@ echo -e "${CYAN}>> Running startup script...${NC}"
 LUNGMASK_CACHE_DIR="/root/.cache/torch/hub/checkpoints"
 MODELS_TO_DOWNLOAD=(
     "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_r231-d5d2fc3d.pth"
-    "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_ltrclobes-d5d2fc3d.pth"
-    "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_r231covidweb-d5d2fc3d.pth"
+    # "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_ltrclobes-d5d2fc3d.pth"
+    # "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_r231covidweb-d5d2fc3d.pth"
 )
 
 # Create cache directory if it doesn't exist
@@ -39,11 +47,10 @@ for model_url in "${MODELS_TO_DOWNLOAD[@]}"; do
         if curl -L -f -o "$model_path" "$model_url" 2>/dev/null; then
             echo -e "${GREEN}>> Successfully downloaded $model_filename${NC}"
         else
-            echo -e "${YELLOW}>> Warning: Failed to download $model_filename (may retry during job execution)${NC}"
-            # Don't fail the startup if download fails - job can retry
+            echo -e "${YELLOW}>> Error: Failed to download $model_filename${NC}"
+            exit 1  # Fail the startup if download fails
         fi
     fi
 done
 
-echo -e "${GREEN}>> Startup script completed${NC}"
-
+echo -e "${GREEN}>> Pre-startup script completed${NC}"
