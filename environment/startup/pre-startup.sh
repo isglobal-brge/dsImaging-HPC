@@ -28,8 +28,8 @@ echo -e "${CYAN}>> Running pre-startup script...${NC}"
 LUNGMASK_CACHE_DIR="/root/.cache/torch/hub/checkpoints"
 MODELS_TO_DOWNLOAD=(
     "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_r231-d5d2fc3d.pth"
-    # "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_ltrclobes-d5d2fc3d.pth"
-    # "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_r231covidweb-d5d2fc3d.pth"
+    "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_ltrclobes-3a07043d.pth"
+    "https://github.com/JoHof/lungmask/releases/download/v0.0/unet_r231covid-0de78a7e.pth"
 )
 
 # Create cache directory if it doesn't exist
