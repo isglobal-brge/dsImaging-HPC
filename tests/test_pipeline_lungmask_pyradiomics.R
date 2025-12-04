@@ -25,9 +25,9 @@ library(dsHPC)
 
 # Create API config
 config <- create_api_config(
-  "http://localhost", 
-  8001, 
-  "YOUR_API_KEY",
+  "http://localhost",
+  8001,
+  "lXCXTxsK6JK8aeGSAZkAI8FGLYug8H9u",
   "X-API-Key",
   ""
 )
@@ -36,11 +36,13 @@ cat("=== Testing Lungmask + PyRadiomics Pipeline ===\n\n")
 
 # Step 1: Upload original image
 cat("Step 1: Uploading original CT image...\n")
-test_image_path <- "study_0001.nii.gz"
+test_image_path <- paste0(
+  "/Users/david/Documents/GitHub/dsMinIO-vault/",
+  "data/collections/images/study_0001.nii.gz"
+)
 
 if (!file.exists(test_image_path)) {
-  cat(sprintf("✗ File '%s' does not exist in current directory\n", test_image_path))
-  stop("Original CT image file not found")
+  stop(sprintf("Original CT image file not found: %s", test_image_path))
 }
 
 file_hash <- upload_file(config, test_image_path, "study_0002.nii.gz")
