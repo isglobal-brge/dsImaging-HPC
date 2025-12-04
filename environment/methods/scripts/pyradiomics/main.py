@@ -215,7 +215,8 @@ def main():
             sys.exit(1)
         
         # Extract parameters with defaults
-        mask_base64 = params.get("mask_base64")
+        # Accept mask_base64 OR mask as parameter (mask is alias for convenience)
+        mask_base64 = params.get("mask_base64") or params.get("mask")
         feature_classes_str = params.get("feature_classes", "firstorder,shape,glcm,glrlm,glszm,gldm,ngtdm")
         bin_width = params.get("bin_width", 25)
         normalize = params.get("normalize", False)
