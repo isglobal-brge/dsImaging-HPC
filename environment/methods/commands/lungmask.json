@@ -20,6 +20,10 @@
       "default": false
     }
   ],
+  "resources": {
+    "min_memory_mb": 3500,
+    "cpus": 1
+  },
   "input_modes": {
     "supports_no_input": false,
     "supports_single_file": true,
