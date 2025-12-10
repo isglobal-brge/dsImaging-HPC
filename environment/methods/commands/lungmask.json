@@ -21,7 +21,7 @@
     }
   ],
   "resources": {
-    "min_memory_mb": 3500,
+    "min_memory_mb": 6000,
     "cpus": 1
   },
   "input_modes": {

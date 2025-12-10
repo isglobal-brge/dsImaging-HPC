@@ -137,33 +137,38 @@ def read_image_file(image_path):
 
 def apply_lungmask(image, model_name="R231", force_cpu=False):
     """Apply lungmask segmentation to an image.
-    
+
     Args:
         image: SimpleITK Image object (required)
         model_name: Model name to use
         force_cpu: Whether to force CPU usage
     """
+    import gc
+
+    inferer = None
+    mask = None
+
     try:
         # Validate model name
         valid_models = ["R231", "LTRCLobes", "R231CovidWeb"]
         if model_name not in valid_models:
             return None, f"Invalid model name '{model_name}'. Valid options: {', '.join(valid_models)}"
-        
+
         # Validate image is a SimpleITK Image
         if not isinstance(image, sitk.Image):
             return None, f"Image must be a SimpleITK Image object, got {type(image).__name__}"
-        
+
         # Store image metadata for later
         image_spacing = image.GetSpacing()
         image_origin = image.GetOrigin()
         image_direction = image.GetDirection()
-        
+
         # Use LMInferer directly (lungmask.apply() is deprecated and has bugs)
         # LMInferer accepts modelname in constructor, not as parameter to apply()
         # Redirect lungmask stdout messages to stderr to avoid interfering with JSON output
         from contextlib import redirect_stdout
         import io
-        
+
         try:
             if force_cpu:
                 # Force CPU by setting CUDA_VISIBLE_DEVICES
@@ -201,7 +206,25 @@ def apply_lungmask(image, model_name="R231", force_cpu=False):
             return None, f"Runtime error during lungmask application: {str(e)}"
         except Exception as e:
             return None, f"Error applying lungmask: {str(e)}"
-        
+        finally:
+            # Memory optimization: explicitly release PyTorch model after inference
+            # This reduces peak memory usage before mask post-processing
+            if inferer is not None:
+                try:
+                    del inferer
+                    inferer = None
+                except:
+                    pass
+            # Force garbage collection to release model memory
+            gc.collect()
+            # Clear PyTorch CUDA cache if available
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except:
+                pass
+
         # Validate mask was created
         if mask is None:
             return None, "Lungmask returned None (no mask generated)"
