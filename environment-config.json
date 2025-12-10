@@ -6,6 +6,14 @@
   "default_api_port": 8001,
   "default_admin_port": 8002,
   "description": "Provides DataSHIELD-compatible functions for imaging analysis using the dsHPC infrastructure.",
+  "resource_requirements": {
+    "min_memory_gb": 16,
+    "recommended_memory_gb": 32,
+    "min_cpus": 4,
+    "recommended_cpus": 8,
+    "system_reserved_mb": 4096,
+    "notes": "Imaging workloads (lungmask, radiomics) require substantial memory. Recommended: Docker Desktop with at least 16GB RAM allocated."
+  },
   "project_website": "https://github.com/isglobal-brge/dsImaging",
   "authors": [
     {
