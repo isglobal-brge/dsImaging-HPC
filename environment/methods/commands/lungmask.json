@@ -22,7 +22,8 @@
   ],
   "resources": {
     "min_memory_mb": 6000,
-    "cpus": 1
+    "cpus": 1,
+    "exclusive": true
   },
   "input_modes": {
     "supports_no_input": false,
