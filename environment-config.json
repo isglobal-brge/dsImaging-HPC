@@ -12,7 +12,16 @@
     "min_cpus": 4,
     "recommended_cpus": 8,
     "system_reserved_mb": 4096,
-    "notes": "Imaging workloads (lungmask, radiomics) require substantial memory. Recommended: Docker Desktop with at least 16GB RAM allocated."
+    "notes": "Imaging workloads (lungmask, radiomics) require substantial memory. Recommended: Docker Desktop with at least 16GB RAM allocated.",
+    "memory_guardian": {
+      "enabled": true,
+      "pause_threshold_pct": 35,
+      "critical_threshold_pct": 15,
+      "resume_threshold_pct": 50,
+      "check_interval_seconds": 3,
+      "kill_cooldown_seconds": 30,
+      "notes": "Memory Guardian monitors system memory and throttles Slurm jobs to prevent OOM kills. DRAIN at <pause%, KILL at <critical%, RESUME at >resume%."
+    }
   },
   "project_website": "https://github.com/isglobal-brge/dsImaging",
   "authors": [
