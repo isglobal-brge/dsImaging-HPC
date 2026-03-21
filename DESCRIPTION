@@ -27,5 +27,9 @@ Suggests:
     yaml,
     testthat (>= 3.0.0),
     withr
+AggregateMethods:
+    radiomicsCapabilitiesDS,
+    radiomicsInstallModelDS,
+    radiomicsListModelsDS
 Config/testthat/edition: 3
 RoxygenNote: 7.3.3
