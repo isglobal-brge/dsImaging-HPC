@@ -219,15 +219,10 @@ def main():
 
     df = pd.DataFrame(results)
     os.makedirs(args.output, exist_ok=True)
-    try:
-        df.to_parquet(os.path.join(args.output, "radiomics.parquet"), index=False)
-        fmt = "parquet"
-    except Exception:
-        df.to_csv(os.path.join(args.output, "radiomics.csv"), index=False)
-        fmt = "csv"
+    df.to_parquet(os.path.join(args.output, "radiomics.parquet"), index=False)
 
     summary = {"n_samples": len(results), "n_features": len(df.columns)-1,
-               "format": fmt, "columns": list(df.columns)}
+               "format": "parquet", "columns": list(df.columns)}
     with open(os.path.join(args.output, "extraction_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
