@@ -20,11 +20,11 @@ Imports:
     jsonlite,
     digest,
     processx,
-    utils
-Suggests:
-    dsJobs,
+    utils,
     dsImaging,
-    yaml,
+    dsJobs,
+    yaml
+Suggests:
     testthat (>= 3.0.0),
     withr
 AggregateMethods:

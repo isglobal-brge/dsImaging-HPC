@@ -125,18 +125,13 @@
 #' reads this to know what to submit next.
 #' @keywords internal
 .drip_feed_next_batch <- function(generation_id, dataset_id) {
-  if (!requireNamespace("dsJobs", quietly = TRUE)) return(invisible(NULL))
+  # dsJobs is in Imports, always available
 
   gen <- dsImaging::get_generation(generation_id)
   if (is.null(gen) || !gen$state %in% c("RUNNING", "PENDING")) return(invisible(NULL))
 
   # Check how many per-image jobs for this generation are currently active
-  dsjobs_db <- dsJobs:::.db_connect()
-  on.exit(dsJobs:::.db_close(dsjobs_db), add = TRUE)
-  active_n <- DBI::dbGetQuery(dsjobs_db,
-    "SELECT COUNT(*) AS n FROM jobs
-     WHERE state IN ('PENDING','RUNNING') AND tags LIKE ?",
-    params = list(paste0("%", generation_id, "%")))$n
+  active_n <- dsJobs::count_active_jobs(paste0("%", generation_id, "%"))
 
   max_inflight <- as.integer(getOption("dsradiomics.max_inflight", 30L))
   if (active_n >= max_inflight) return(invisible(NULL))

@@ -19,17 +19,46 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   profile    <- .dsr_decode(profile_enc)
   visibility <- .dsr_decode(visibility_enc)
 
-  if (!requireNamespace("dsImaging", quietly = TRUE))
-    stop("dsImaging required", call. = FALSE)
+  # dsImaging is in Imports, always available
 
-  # Resolve image root from manifest
-  image_root <- .resolve_image_root(dataset_id)
-  if (is.null(image_root) || !dir.exists(image_root))
-    stop("Cannot resolve image root for dataset: ", dataset_id, call. = FALSE)
+  # Resolve dataset (returns backend, manifest, publish config)
+  resolved <- .resolve_ds(dataset_id)
+  if (is.null(resolved))
+    stop("Cannot resolve dataset: ", dataset_id, call. = FALSE)
 
-  # Fingerprint all images (with strong content hash for dedup)
-  fp_result <- dsImaging::compute_collection_fingerprints(dataset_id, image_root,
-    compute_content_hash = TRUE)
+  manifest <- dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend)
+  image_root <- manifest$assets$images$uri
+
+  # Fingerprint: for S3, use hash index. For file, use Python script.
+  if (resolved$backend$type == "s3") {
+    hash_index_uri <- manifest$content_hash_index$uri
+    if (is.null(hash_index_uri))
+      stop("S3 dataset requires content_hash_index in manifest.", call. = FALSE)
+    idx <- dsImaging::read_hash_index(resolved$backend, hash_index_uri)
+    fp_result <- dsImaging::diff_hash_index(idx, dataset_id)
+    # Store new hashes in local SQLite for future diffs
+    if (length(fp_result$new) > 0 || length(fp_result$changed) > 0) {
+      db <- dsImaging::.asset_db_connect()
+      now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+      for (sid in c(fp_result$new, fp_result$changed)) {
+        ch <- fp_result$content_hashes[[sid]]
+        if (!is.null(ch)) {
+          DBI::dbExecute(db,
+            "INSERT OR REPLACE INTO content_fingerprints
+             (dataset_id, sample_id, file_path, fingerprint, content_hash,
+              file_size, file_mtime, computed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params = list(dataset_id, sid, "", ch, ch, 0L, 0, now))
+        }
+      }
+      dsImaging::.asset_db_close(db)
+    }
+  } else {
+    if (!dir.exists(image_root))
+      stop("Image root not found: ", image_root, call. = FALSE)
+    fp_result <- dsImaging::compute_collection_fingerprints(dataset_id, image_root,
+      compute_content_hash = TRUE)
+  }
 
   # Build processor identity for derivation hashing
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
@@ -133,11 +162,15 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
   content_hashes <- if (!is.null(content_hashes_enc))
     .dsr_decode(content_hashes_enc) else list()
 
-  if (!requireNamespace("dsJobs", quietly = TRUE))
-    stop("dsJobs required", call. = FALSE)
+  # dsJobs is in Imports, always available
 
-  image_root <- .resolve_image_root(dataset_id)
+  resolved <- .resolve_ds(dataset_id)
+  manifest <- tryCatch(
+    dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend),
+    error = function(e) NULL)
+  image_root <- if (!is.null(manifest)) manifest$assets$images$uri else NULL
   mask_root <- .resolve_mask_root(dataset_id, segmenter)
+  backend <- resolved$backend
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
 
   # Map segmenter to runner
@@ -175,13 +208,17 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
     }
 
     # Resolve image path
-    image_path <- .resolve_sample_image(image_root, sid, dataset_id = dataset_id)
-    if (is.null(image_path)) {
+    image_uri <- .resolve_sample_image(image_root, sid,
+      dataset_id = dataset_id, backend = backend)
+    if (is.null(image_uri)) {
       dsImaging::complete_item_atomic(generation_id, sid, "failed",
         error = "Image file not found")
       submitted[[sid]] <- list(status = "failed", error = "Image not found")
       next
     }
+
+    # For S3 images: stage to local filesystem for the Python runner
+    image_path <- .stage_image_for_job(image_uri, sid, dataset_id, backend)
 
     # Build per-image job steps (using dsJobs step format)
     steps <- list()
@@ -427,19 +464,11 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
 #'
 #' @keywords internal
 .sync_failed_jobs <- function(generation_id) {
-  if (!requireNamespace("dsJobs", quietly = TRUE)) return(invisible(NULL))
-
   pending_items <- dsImaging::get_generation_items(generation_id, status = "pending")
   if (nrow(pending_items) == 0) return(invisible(NULL))
 
-  # Query dsJobs for all failed jobs tagged with this generation
-  db <- dsJobs:::.db_connect()
-  on.exit(dsJobs:::.db_close(db), add = TRUE)
-
-  failed_jobs <- DBI::dbGetQuery(db,
-    "SELECT job_id, tags, error_message FROM jobs
-     WHERE state = 'FAILED' AND tags LIKE ?",
-    params = list(paste0("%", generation_id, "%")))
+  # Query dsJobs for failed jobs tagged with this generation
+  failed_jobs <- dsJobs::query_failed_jobs(paste0("%", generation_id, "%"))
 
   if (nrow(failed_jobs) == 0) return(invisible(NULL))
 
@@ -488,7 +517,7 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
 #' Get current owner_id
 #' @keywords internal
 .dsr_owner_id <- function() {
-  tryCatch(dsJobs:::.get_owner_id(), error = function(e) {
+  tryCatch(dsJobs::get_owner_id(), error = function(e) {
     Sys.getenv("USER", Sys.info()[["user"]] %||% "unknown")
   })
 }
@@ -523,21 +552,36 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
   }, error = function(e) NULL)
 }
 
-#' Resolve a single sample's image file path
+#' Resolve a single sample's image URI or local path
 #'
-#' Checks sample_manifests first (supports DICOM series, bundles).
-#' Falls back to directory scanning for backward compat.
+#' For S3: constructs URI from image_root + sample_id + known extensions.
+#' For file: scans directory.
 #' @keywords internal
-.resolve_sample_image <- function(image_root, sample_id, dataset_id = NULL) {
+.resolve_sample_image <- function(image_root, sample_id, dataset_id = NULL,
+                                   backend = NULL) {
   # 1. Try sample manifest (canonical for multi-file samples)
   if (!is.null(dataset_id)) {
     primary <- tryCatch(
       dsImaging::get_sample_primary_path(dataset_id, sample_id),
       error = function(e) NULL)
-    if (!is.null(primary) && file.exists(primary)) return(primary)
+    if (!is.null(primary)) {
+      if (grepl("^s3://", primary)) return(primary)
+      if (file.exists(primary)) return(primary)
+    }
   }
 
-  # 2. Fallback: directory scan (single-file samples)
+  # 2. S3 backend: try known extensions against image_root URI
+  if (!is.null(backend) && backend$type == "s3" && grepl("^s3://", image_root)) {
+    exts <- c(".nii.gz", ".nii", ".nrrd", ".mha", ".dcm")
+    for (ext in exts) {
+      candidate <- paste0(sub("/$", "", image_root), "/", sample_id, ext)
+      head <- dsImaging::backend_head(backend, candidate)
+      if (!is.null(head) && isTRUE(head$exists)) return(candidate)
+    }
+    return(NULL)
+  }
+
+  # 3. File backend: directory scan
   if (is.null(image_root) || !dir.exists(image_root)) return(NULL)
   files <- list.files(image_root, full.names = TRUE)
   for (f in files) {
@@ -561,6 +605,28 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
     if (grepl(sample_id, name, fixed = TRUE)) return(f)
   }
   NULL
+}
+
+#' Stage an S3 image to local filesystem for Python runner execution
+#'
+#' Python runners expect local file paths. For S3-backed datasets,
+#' this downloads the image to a staging directory.
+#' For file-backed datasets, returns the path as-is.
+#' @keywords internal
+.stage_image_for_job <- function(image_uri, sample_id, dataset_id, backend) {
+  if (is.null(backend) || backend$type == "file") return(image_uri)
+  if (!grepl("^s3://", image_uri)) return(image_uri)
+
+  # Stage to DSJOBS_HOME/staging/dataset_id/
+  staging_dir <- file.path(
+    getOption("dsjobs.home", "/var/lib/dsjobs"), "staging", dataset_id)
+  dir.create(staging_dir, recursive = TRUE, showWarnings = FALSE)
+
+  local_path <- file.path(staging_dir, basename(image_uri))
+  if (!file.exists(local_path))
+    dsImaging::backend_get_file(backend, image_uri, local_path)
+
+  local_path
 }
 
 #' Resolve a profile name to its YAML file path
