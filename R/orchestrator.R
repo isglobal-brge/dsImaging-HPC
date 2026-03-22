@@ -107,16 +107,14 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     done_ids <- items$sample_id[items$status == "completed"]
     failed_ids <- items$sample_id[items$status == "failed"]
     pending_ids <- items$sample_id[items$status == "pending"]
+    # Return only counts to client -- sample IDs stay server-side (disclosure control)
     return(list(
       action = "resume",
       generation_id = generation_id,
       total = total_n,
       done = length(done_ids),
       failed = length(failed_ids),
-      pending = length(pending_ids),
-      pending_ids = pending_ids,
-      fingerprints = fp_result$fingerprints,
-      content_hashes = fp_result$content_hashes
+      pending = length(pending_ids)
     ))
   }
 
@@ -130,15 +128,14 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     state = "RUNNING",
     completed_n = length(fp_result$unchanged))
 
+  # Return only counts to client -- sample IDs and hashes stay server-side
+  # The drip feed (server-side) reads pending_ids from the generation items
   list(
     action = "run_new",
     generation_id = generation_id,
     total = total_n,
     done = length(fp_result$unchanged),
-    pending = length(pending_ids),
-    pending_ids = pending_ids,
-    fingerprints = fp_result$fingerprints,
-    content_hashes = fp_result$content_hashes
+    pending = length(pending_ids)
   )
 }
 
@@ -344,7 +341,6 @@ radiomicsCollectionStatusDS <- function(generation_id_enc) {
     pending = length(pending_ids),
     claimed = length(claimed_ids),
     running = length(running_ids),
-    failed_samples = if (length(failed_ids) > 0) failed_ids else NULL,
     is_done = not_done == 0L
   )
 }
@@ -404,7 +400,7 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
     total = total,
     completed = n_completed,
     failed = n_failed,
-    failed_samples = if (n_failed > 0) failed$sample_id else character(0),
+    # failed_samples stripped -- individual sample IDs are disclosive
     item_artifacts = as.list(
       stats::setNames(completed$artifact_relpath, completed$sample_id))
   )
