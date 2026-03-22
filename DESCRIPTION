@@ -30,6 +30,10 @@ Suggests:
 AggregateMethods:
     radiomicsCapabilitiesDS,
     radiomicsInstallModelDS,
-    radiomicsListModelsDS
+    radiomicsListModelsDS,
+    radiomicsScanCollectionDS,
+    radiomicsSubmitBatchDS,
+    radiomicsCollectionStatusDS,
+    radiomicsPublishCollectionDS
 Config/testthat/edition: 3
 RoxygenNote: 7.3.3

@@ -37,7 +37,8 @@
     allowed_params = c("settings_file", "mask_asset", "image_asset",
                         "dataset_id", "label_channel", "force2D", "voxel_based",
                         "profile_name", "bin_width", "feature_classes",
-                        "name", "normalize", "resampled_spacing", "image_types")
+                        "name", "normalize", "resampled_spacing", "image_types",
+                        "image", "mask", "sample_id", "generation_id")
   ))
 
   # TotalSegmentator runner
@@ -55,7 +56,8 @@
     ),
     timeout_secs = 7200L,
     allowed_params = c("task", "fast", "roi_subset", "statistics",
-                        "image_asset", "provider")
+                        "image_asset", "provider",
+                        "image", "sample_id", "generation_id")
   ))
 
   # LungMask runner
@@ -72,7 +74,8 @@
       "--model", "{model_name}"
     ),
     timeout_secs = 3600L,
-    allowed_params = c("model_name", "image_asset", "provider")
+    allowed_params = c("model_name", "image_asset", "provider",
+                        "image", "sample_id", "generation_id")
   ))
 
   # nnU-Net v2 runner
@@ -90,7 +93,8 @@
     ),
     timeout_secs = 7200L,
     allowed_params = c("model_name", "fold", "checkpoint", "step_size",
-                        "image_asset", "provider")
+                        "image_asset", "provider",
+                        "image", "sample_id", "generation_id")
   ))
 
   # MONAI bundle runner
@@ -108,7 +112,8 @@
     ),
     timeout_secs = 7200L,
     allowed_params = c("bundle_name", "bundle_path", "device",
-                        "image_asset", "provider")
+                        "image_asset", "provider",
+                        "image", "sample_id", "generation_id")
   ))
 }
 

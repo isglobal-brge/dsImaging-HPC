@@ -34,12 +34,26 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model", default="R231")
+    parser.add_argument("--image", default=None,
+                        help="Single image path (single-image mode)")
+    parser.add_argument("--sample-id", default=None,
+                        help="Sample identifier (single-image mode)")
     args = parser.parse_args()
 
     print(f"LungMask inference")
     print(f"  Model: {args.model}")
 
-    images = find_images(args.input)
+    # Merge CLI args with env vars (dsJobs sets DSJOBS_CFG_* from config)
+    image = args.image or os.environ.get("DSJOBS_CFG_IMAGE")
+    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSJOBS_CFG_SAMPLE_ID")
+
+    if image:
+        sid = sample_id or os.path.splitext(os.path.basename(image))[0]
+        images = [(image, sid)]
+        print(f"  Single-image mode: {sid}")
+    else:
+        images = find_images(args.input)
+
     print(f"  Found {len(images)} images")
     os.makedirs(args.output, exist_ok=True)
 

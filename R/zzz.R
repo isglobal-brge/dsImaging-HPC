@@ -21,10 +21,13 @@
   # 1. Register runners into DSJOBS_HOME/runners/
   tryCatch(.register_radiomics_runners(), error = function(e) NULL)
 
-  # 2. Register publisher plugin in dsJobs
+  # 2. Register publisher plugins in dsJobs
   if (requireNamespace("dsJobs", quietly = TRUE)) {
     tryCatch(
       dsJobs::register_dsjobs_publisher("radiomics_asset", .radiomics_publisher),
+      error = function(e) NULL)
+    tryCatch(
+      dsJobs::register_dsjobs_publisher("radiomics_image_result", .radiomics_image_publisher),
       error = function(e) NULL)
   }
 }
