@@ -158,15 +158,8 @@
   profile_name <- spec$profile
   processor <- spec$processor
 
-  # We need fingerprints for these samples -- read from content_fingerprints
-  fp_db <- dsImaging::.asset_db_connect()
-  on.exit(dsImaging::.asset_db_close(fp_db), add = TRUE)
-  fps <- DBI::dbGetQuery(fp_db,
-    paste0("SELECT sample_id, fingerprint FROM content_fingerprints
-            WHERE dataset_id = ? AND sample_id IN (",
-           paste(rep("?", length(batch_ids)), collapse = ","), ")"),
-    params = c(list(dataset_id), as.list(batch_ids)))
-  fingerprints <- stats::setNames(as.list(fps$fingerprint), fps$sample_id)
+  # Get content hashes for these samples from dsImaging
+  fingerprints <- dsImaging::get_content_hashes(dataset_id, batch_ids)
 
   # Resolve paths and submit
   image_root <- .resolve_image_root(dataset_id)

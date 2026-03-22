@@ -21,12 +21,18 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
 
   # dsImaging is in Imports, always available
 
-  # Resolve dataset (returns backend, manifest, publish config)
+  # Resolve dataset (returns backend + manifest from handle or registry)
   resolved <- .resolve_ds(dataset_id)
   if (is.null(resolved))
     stop("Cannot resolve dataset: ", dataset_id, call. = FALSE)
 
-  manifest <- dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend)
+  # Get manifest: from handle (already parsed) or from URI
+  manifest <- resolved$manifest
+  if (is.null(manifest) && !is.null(resolved$manifest_uri))
+    manifest <- dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend)
+  if (is.null(manifest))
+    stop("Cannot load manifest for dataset: ", dataset_id, call. = FALSE)
+
   image_root <- manifest$assets$images$uri
 
   # Fingerprint: for S3, use hash index. For file, use Python script.
@@ -37,21 +43,13 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     idx <- dsImaging::read_hash_index(resolved$backend, hash_index_uri)
     fp_result <- dsImaging::diff_hash_index(idx, dataset_id)
     # Store new hashes in local SQLite for future diffs
-    if (length(fp_result$new) > 0 || length(fp_result$changed) > 0) {
-      db <- dsImaging::.asset_db_connect()
-      now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
-      for (sid in c(fp_result$new, fp_result$changed)) {
-        ch <- fp_result$content_hashes[[sid]]
-        if (!is.null(ch)) {
-          DBI::dbExecute(db,
-            "INSERT OR REPLACE INTO content_fingerprints
-             (dataset_id, sample_id, file_path, fingerprint, content_hash,
-              file_size, file_mtime, computed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params = list(dataset_id, sid, "", ch, ch, 0L, 0, now))
-        }
-      }
-      dsImaging::.asset_db_close(db)
+    new_changed <- c(fp_result$new, fp_result$changed)
+    if (length(new_changed) > 0) {
+      hashes <- vapply(new_changed, function(sid)
+        fp_result$content_hashes[[sid]] %||% "", character(1))
+      valid <- nzchar(hashes)
+      if (any(valid))
+        dsImaging::store_content_hashes(dataset_id, new_changed[valid], hashes[valid])
     }
   } else {
     if (!dir.exists(image_root))
@@ -497,11 +495,19 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
 #' @keywords internal
 .dsr_decode <- function(x) {
   if (is.character(x) && length(x) == 1) {
-    raw <- tryCatch(jsonlite::base64_dec(x), error = function(e) NULL)
+    # Handle URL-safe base64 (from dsJobsClient .ds_encode: +->-, /->_, no =)
+    b64 <- x
+    if (startsWith(b64, "B64:")) b64 <- sub("^B64:", "", b64)
+    b64 <- gsub("-", "+", gsub("_", "/", b64))
+    # Add padding
+    pad <- nchar(b64) %% 4
+    if (pad > 0) b64 <- paste0(b64, strrep("=", 4 - pad))
+
+    raw <- tryCatch(jsonlite::base64_dec(b64), error = function(e) NULL)
     if (!is.null(raw)) {
-      return(jsonlite::fromJSON(rawToChar(raw), simplifyVector = TRUE))
+      return(jsonlite::fromJSON(rawToChar(raw), simplifyVector = FALSE))
     }
-    return(tryCatch(jsonlite::fromJSON(x, simplifyVector = TRUE),
+    return(tryCatch(jsonlite::fromJSON(x, simplifyVector = FALSE),
                      error = function(e) x))
   }
   x
@@ -523,8 +529,42 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
 }
 
 #' Resolve dataset and return full resolved context
+#'
+#' Tries three paths:
+#'   1. Imaging handle (has backend from resource credentials)
+#'   2. Registry (server has pre-configured registry)
+#'   3. NULL (can't resolve)
+#'
 #' @keywords internal
 .resolve_ds <- function(dataset_id) {
+  # 1. Try imaging handle (created by imagingInitDS with backend from resource)
+  backend <- tryCatch(
+    dsImaging::imagingGetBackendDS("img"),
+    error = function(e) NULL)
+  if (is.null(backend)) {
+    # Try common handle symbols
+    for (sym in c("img_res", "imaging", "res")) {
+      backend <- tryCatch(
+        dsImaging::imagingGetBackendDS(sym),
+        error = function(e) NULL)
+      if (!is.null(backend)) break
+    }
+  }
+
+  if (!is.null(backend)) {
+    manifest <- dsImaging::imagingGetManifestDS(dataset_id)
+    if (!is.null(manifest)) {
+      return(list(
+        dataset_id = dataset_id,
+        backend = backend,
+        manifest = manifest,
+        manifest_uri = NULL,
+        publish = backend
+      ))
+    }
+  }
+
+  # 2. Try registry
   tryCatch(dsImaging::resolve_dataset(dataset_id), error = function(e) NULL)
 }
 
