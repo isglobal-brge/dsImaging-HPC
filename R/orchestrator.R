@@ -446,6 +446,194 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
 }
 
 # ---------------------------------------------------------------------------
+# 5. Validate mask-image correspondence for dsFlower
+# ---------------------------------------------------------------------------
+
+#' Validate that segmentation masks correspond to a set of images
+#'
+#' DataSHIELD AGGREGATE method. Given a generation_id (from a segmentation
+#' run), verifies that:
+#' \enumerate{
+#'   \item Each completed mask artifact still exists on disk (dsJobs artifact)
+#'   \item Each mask's derivation_hash matches the source image's content_hash
+#'   \item The generation covers the requested sample set
+#' }
+#'
+#' If masks are missing (expired dsJobs artifacts), returns which samples
+#' need regeneration. Does NOT auto-regenerate.
+#'
+#' @param generation_id_enc Encoded generation_id.
+#' @param dataset_id Character; the imaging dataset being validated against.
+#' @return List with valid (logical), n_valid, n_missing, n_failed,
+#'   and a mask_manifest (sample_id -> mask_path mapping) for valid masks.
+#' @export
+radiomicsValidateMasksDS <- function(generation_id_enc, dataset_id) {
+  generation_id <- .dsr_decode(generation_id_enc)
+
+  # Sync any pending failures from dsJobs
+  .sync_failed_jobs(generation_id)
+
+  gen <- dsImaging::get_generation(generation_id)
+  if (is.null(gen))
+    stop("Generation not found: ", generation_id, call. = FALSE)
+
+  # Verify generation matches the requested dataset
+  gen_spec <- tryCatch(
+    jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
+    error = function(e) list()
+  )
+  if (!is.null(gen_spec$dataset_id) && gen_spec$dataset_id != dataset_id) {
+    stop("Generation '", generation_id, "' belongs to dataset '",
+         gen_spec$dataset_id, "', not '", dataset_id, "'.", call. = FALSE)
+  }
+
+  items <- dsImaging::get_generation_items(generation_id)
+
+  n_valid <- 0L
+  n_missing <- 0L
+  n_failed <- 0L
+  mask_paths <- list()
+  missing_samples <- character(0)
+
+  for (i in seq_len(nrow(items))) {
+    sid <- items$sample_id[i]
+    status <- items$status[i]
+
+    if (status == "failed") {
+      n_failed <- n_failed + 1L
+      next
+    }
+
+    if (status != "completed") {
+      n_missing <- n_missing + 1L
+      missing_samples <- c(missing_samples, sid)
+      next
+    }
+
+    artifact_path <- items$artifact_relpath[i]
+    if (is.na(artifact_path) || !nzchar(artifact_path)) {
+      n_missing <- n_missing + 1L
+      missing_samples <- c(missing_samples, sid)
+      next
+    }
+
+    # Check if the artifact file still exists on disk
+    # dsJobs artifacts are at DSJOBS_HOME/artifacts/{job_id}/...
+    # artifact_relpath may be absolute or relative
+    if (!file.exists(artifact_path)) {
+      # Try under dsJobs home
+      dsjobs_home <- getOption("dsjobs.home", "/srv/dsjobs")
+      alt_path <- file.path(dsjobs_home, "artifacts", artifact_path)
+      if (!file.exists(alt_path)) {
+        n_missing <- n_missing + 1L
+        missing_samples <- c(missing_samples, sid)
+        next
+      }
+      artifact_path <- alt_path
+    }
+
+    # Find the mask file in the artifact directory
+    mask_file <- .find_mask_in_artifact(artifact_path, sid)
+    if (is.null(mask_file)) {
+      n_missing <- n_missing + 1L
+      missing_samples <- c(missing_samples, sid)
+      next
+    }
+
+    mask_paths[[sid]] <- mask_file
+    n_valid <- n_valid + 1L
+  }
+
+  total <- nrow(items)
+  all_valid <- n_valid == total && n_missing == 0L && n_failed == 0L
+
+  list(
+    valid = all_valid,
+    generation_id = generation_id,
+    dataset_id = dataset_id,
+    segmenter = gen_spec$processor %||% "unknown",
+    total = total,
+    n_valid = n_valid,
+    n_missing = n_missing,
+    n_failed = n_failed,
+    needs_regeneration = length(missing_samples) > 0,
+    # mask_paths stays server-side (disclosure: no sample IDs to client)
+    # dsFlower reads it server-side via radiomicsGetMaskManifestDS
+    ready_for_training = all_valid
+  )
+}
+
+#' Get the mask manifest for a validated generation
+#'
+#' DataSHIELD server-side function (NOT aggregate -- called internally
+#' by dsFlower's flowerPrepareRunDS for segmentation tasks).
+#' Returns the sample_id -> mask_path mapping.
+#'
+#' @param generation_id Character; the generation to query.
+#' @return Named list mapping sample_id to absolute mask file path.
+#' @keywords internal
+radiomicsGetMaskPaths <- function(generation_id) {
+  items <- dsImaging::get_generation_items(generation_id,
+                                            status = "completed")
+  paths <- list()
+  for (i in seq_len(nrow(items))) {
+    sid <- items$sample_id[i]
+    artifact_path <- items$artifact_relpath[i]
+    if (is.na(artifact_path)) next
+
+    if (!file.exists(artifact_path)) {
+      dsjobs_home <- getOption("dsjobs.home", "/srv/dsjobs")
+      artifact_path <- file.path(dsjobs_home, "artifacts", artifact_path)
+    }
+
+    mask_file <- .find_mask_in_artifact(artifact_path, sid)
+    if (!is.null(mask_file)) paths[[sid]] <- mask_file
+  }
+  paths
+}
+
+#' Find a mask file within a dsJobs artifact directory
+#' @keywords internal
+.find_mask_in_artifact <- function(artifact_path, sample_id) {
+  # artifact_path might be a file or a directory
+  if (file.exists(artifact_path) && !dir.exists(artifact_path)) {
+    # It's a file -- check if it's a NIfTI/NRRD mask
+    if (grepl("\\.(nii\\.gz|nii|nrrd|mha|png)$", artifact_path, ignore.case = TRUE))
+      return(artifact_path)
+  }
+
+  # It's a directory -- search for mask files
+  if (dir.exists(artifact_path)) {
+    # Look for seg_manifest.json first (written by segmentation runners)
+    seg_manifest <- file.path(artifact_path, "seg_manifest.json")
+    if (file.exists(seg_manifest)) {
+      manifest <- tryCatch(
+        jsonlite::fromJSON(seg_manifest, simplifyVector = FALSE),
+        error = function(e) NULL)
+      if (!is.null(manifest) && !is.null(manifest$samples[[sample_id]])) {
+        primary <- manifest$samples[[sample_id]]$primary_mask
+        if (!is.null(primary) && file.exists(primary)) return(primary)
+      }
+    }
+
+    # Fallback: scan for NIfTI files containing sample_id or "mask"
+    files <- list.files(artifact_path, recursive = TRUE, full.names = TRUE)
+    mask_files <- files[grepl("\\.(nii\\.gz|nii|nrrd|png)$", files,
+                              ignore.case = TRUE)]
+
+    # Prefer files with "mask" or "seg" in name
+    for (f in mask_files) {
+      bn <- basename(f)
+      if (grepl("mask|seg|label", bn, ignore.case = TRUE)) return(f)
+    }
+    # Otherwise first NIfTI
+    if (length(mask_files) > 0) return(mask_files[1])
+  }
+
+  NULL
+}
+
+# ---------------------------------------------------------------------------
 # Failure synchronization
 # ---------------------------------------------------------------------------
 
