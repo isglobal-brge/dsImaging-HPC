@@ -120,10 +120,11 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     ))
   }
 
-  # New generation: register all items
+  # New generation: register all items as pending
+  # Even if a per-image asset with matching hash exists from another dataset,
+  # this generation needs to process (or verify) each image independently.
   for (sid in names(fp_result$fingerprints)) {
-    status <- if (sid %in% pending_ids) "pending" else "completed"
-    dsImaging::record_item_status(generation_id, sid, status)
+    dsImaging::record_item_status(generation_id, sid, "pending")
   }
 
   dsImaging::update_generation(generation_id,
