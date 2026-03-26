@@ -73,7 +73,11 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   )
 
   # Claim or reuse generation
-  pending_ids <- c(fp_result$new, fp_result$changed)
+  # All sample IDs are candidates. The diff (new/changed/unchanged) is about
+  # file content changes, not about processing status. Per-image dedup happens
+  # at submit time via derivation hash check in radiomicsSubmitBatchDS.
+  all_sample_ids <- names(fp_result$content_hashes)
+  if (length(all_sample_ids) == 0) all_sample_ids <- names(fp_result$fingerprints)
   total_n <- fp_result$total
 
   gen_result <- dsImaging::claim_or_reuse_generation(
@@ -106,39 +110,54 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     # Resume: sync failed jobs first, then check which items are pending
     .sync_failed_jobs(generation_id)
     items <- dsImaging::get_generation_items(generation_id)
+
+    # If generation exists but has no items, populate them
+    if (nrow(items) == 0) {
+      pop_ids <- names(fp_result$content_hashes)
+      if (length(pop_ids) == 0) pop_ids <- names(fp_result$fingerprints)
+      for (sid in pop_ids) {
+        dsImaging::record_item_status(generation_id, sid, "pending")
+      }
+      items <- dsImaging::get_generation_items(generation_id)
+    }
+
     done_ids <- items$sample_id[items$status == "completed"]
     failed_ids <- items$sample_id[items$status == "failed"]
-    pending_ids <- items$sample_id[items$status == "pending"]
-    # Return only counts to client -- sample IDs stay server-side (disclosure control)
+    resume_pending <- items$sample_id[items$status == "pending"]
+    # Also re-queue failed items for retry
+    retry_ids <- c(resume_pending, failed_ids)
     return(list(
       action = "resume",
       generation_id = generation_id,
       total = dsImaging::safe_metadata_count(total_n),
       done = dsImaging::safe_metadata_count(length(done_ids)),
-      failed = dsImaging::safe_metadata_count(length(failed_ids)),
-      pending = dsImaging::safe_metadata_count(length(pending_ids))
+      pending_ids = retry_ids,
+      fingerprints = fp_result$fingerprints[retry_ids],
+      content_hashes = fp_result$content_hashes[retry_ids]
     ))
   }
 
   # New generation: register all items as pending
   # Even if a per-image asset with matching hash exists from another dataset,
   # this generation needs to process (or verify) each image independently.
-  for (sid in names(fp_result$fingerprints)) {
+  for (sid in all_sample_ids) {
     dsImaging::record_item_status(generation_id, sid, "pending")
   }
 
   dsImaging::update_generation(generation_id,
     state = "RUNNING",
-    completed_n = length(fp_result$unchanged))
+    completed_n = 0L)
 
-  # Return only counts to client -- sample IDs and hashes stay server-side
-  # The drip feed (server-side) reads pending_ids from the generation items
+  # Return IDs + hashes so client can submit the first batch
+  # Server drip feed auto-submits subsequent batches
   list(
     action = "run_new",
     generation_id = generation_id,
     total = dsImaging::safe_metadata_count(total_n),
-    done = dsImaging::safe_metadata_count(length(fp_result$unchanged)),
-    pending = dsImaging::safe_metadata_count(length(pending_ids))
+    done = 0L,
+    pending_ids = all_sample_ids,
+    fingerprints = fp_result$fingerprints,
+    content_hashes = fp_result$content_hashes
   )
 }
 
@@ -163,9 +182,13 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
   # dsJobs is in Imports, always available
 
   resolved <- .resolve_ds(dataset_id)
-  manifest <- tryCatch(
-    dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend),
-    error = function(e) NULL)
+  # Use pre-parsed manifest from handle, or parse from URI
+  manifest <- resolved$manifest
+  if (is.null(manifest) && !is.null(resolved$manifest_uri)) {
+    manifest <- tryCatch(
+      dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend),
+      error = function(e) NULL)
+  }
   image_root <- if (!is.null(manifest)) manifest$assets$images$uri else NULL
   mask_root <- .resolve_mask_root(dataset_id, segmenter)
   backend <- resolved$backend
@@ -184,10 +207,11 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 
   for (sid in sample_ids) {
     fp <- fingerprints[[sid]]
-    if (is.null(fp)) next
+    ch <- content_hashes[[sid]]
+    # Need at least one identifier (content_hash or fingerprint)
+    if (is.null(fp) && is.null(ch)) next
 
     # Per-image derivation hash: prefer content_hash (strong) over fingerprint (fast)
-    ch <- content_hashes[[sid]]
     spec_hash <- dsImaging::compute_image_derivation_hash(
       content_hash = ch,
       fingerprint = fp,
@@ -334,18 +358,24 @@ radiomicsCollectionStatusDS <- function(generation_id_enc) {
 
   # pending + claimed + running = "not yet done"
   not_done <- length(pending_ids) + length(claimed_ids) + length(running_ids)
+  total_items <- nrow(items)
+  expected <- as.integer(gen$expected_n %||% total_items)
+
+  # is_done: all items resolved (completed or failed) AND we have items
+  # Guard against empty items table (generation exists but scan hasn't populated items yet)
+  all_resolved <- not_done == 0L && total_items > 0 && total_items >= expected
 
   # Apply disclosure control to all counts returned to client
   list(
     generation_id = generation_id,
     state = gen$state,
-    total = dsImaging::safe_metadata_count(as.integer(gen$expected_n %||% nrow(items))),
+    total = dsImaging::safe_metadata_count(expected),
     completed = dsImaging::safe_metadata_count(length(completed_ids)),
     failed = dsImaging::safe_metadata_count(length(failed_ids)),
     pending = dsImaging::safe_metadata_count(length(pending_ids)),
     claimed = dsImaging::safe_metadata_count(length(claimed_ids)),
     running = dsImaging::safe_metadata_count(length(running_ids)),
-    is_done = not_done == 0L
+    is_done = all_resolved
   )
 }
 
@@ -705,8 +735,12 @@ radiomicsGetMaskPaths <- function(generation_id) {
 #' Encode a value for dsJobs internal submission
 #' @keywords internal
 .dsr_encode <- function(x) {
-  json <- jsonlite::toJSON(x, auto_unbox = TRUE, null = "null")
-  jsonlite::base64_enc(charToRaw(as.character(json)))
+  json <- as.character(jsonlite::toJSON(x, auto_unbox = TRUE, null = "null"))
+  b64 <- gsub("[\r\n]", "", jsonlite::base64_enc(charToRaw(json)))
+  b64 <- gsub("\\+", "-", b64)
+  b64 <- gsub("/", "_", b64)
+  b64 <- gsub("=+$", "", b64)
+  paste0("B64:", b64)
 }
 
 #' Get current owner_id
@@ -847,8 +881,8 @@ radiomicsGetMaskPaths <- function(generation_id) {
   if (!grepl("^s3://", image_uri)) return(image_uri)
 
   # Stage to DSJOBS_HOME/staging/dataset_id/
-  staging_dir <- file.path(
-    getOption("dsjobs.home", "/var/lib/dsjobs"), "staging", dataset_id)
+  home <- tryCatch(dsJobs:::.dsjobs_home(), error = function(e) "/srv/dsjobs")
+  staging_dir <- file.path(home, "staging", dataset_id)
   dir.create(staging_dir, recursive = TRUE, showWarnings = FALSE)
 
   local_path <- file.path(staging_dir, basename(image_uri))

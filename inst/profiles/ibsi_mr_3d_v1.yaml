@@ -17,6 +17,6 @@ featureClass:
   gldm:
 
 imageType:
-  Original:
+  Original: {}
   LoG:
     sigma: [2.0, 3.0]

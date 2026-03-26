@@ -53,6 +53,7 @@ def main():
     # Merge CLI args with env vars (dsJobs sets DSJOBS_CFG_* from config)
     image = args.image or os.environ.get("DSJOBS_CFG_IMAGE")
     sample_id = getattr(args, "sample_id", None) or os.environ.get("DSJOBS_CFG_SAMPLE_ID")
+    fast = os.environ.get("DSJOBS_CFG_FAST", "").lower() in ("true", "1", "yes")
 
     # Single-image mode
     if image:
@@ -63,6 +64,8 @@ def main():
         images = find_images(args.input)
 
     print(f"  Found {len(images)} images")
+    if fast:
+        print(f"  Using fast mode (3mm resolution)")
     os.makedirs(args.output, exist_ok=True)
 
     from totalsegmentator.python_api import totalsegmentator
@@ -73,8 +76,10 @@ def main():
             print(f"  Segmenting: {sample_id}")
             out_dir = os.path.join(args.output, sample_id)
             os.makedirs(out_dir, exist_ok=True)
-            totalsegmentator(img_path, out_dir, task=args.task)
-            results.append({"sample_id": sample_id, "status": "done"})
+            totalsegmentator(img_path, out_dir, task=args.task, fast=fast)
+            masks = [f for f in os.listdir(out_dir) if f.endswith((".nii.gz", ".nii"))]
+            print(f"  Done: {len(masks)} masks")
+            results.append({"sample_id": sample_id, "status": "done", "n_masks": len(masks)})
         except Exception as e:
             print(f"  FAILED {sample_id}: {e}", file=sys.stderr)
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
@@ -103,6 +108,10 @@ def main():
         json.dump(seg_manifest, f, indent=2)
 
     print(f"  Done: {summary['n_done']}/{summary['n_total']} ({summary['n_failed']} failed)")
+
+    # Exit non-zero if all images failed (so dsJobs marks step as failed)
+    if summary["n_done"] == 0 and summary["n_total"] > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -251,4 +251,29 @@ for fw in radiomics seg_totalseg seg_nnunetv2 seg_monai; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+# Fix permissions for Rock/Rserve user
+# ---------------------------------------------------------------------------
+# Rserve runs as 'rock' user; ensure it can write to staging/models dirs
+log_info "Fixing permissions..."
+DSJOBS_HOME="${DSJOBS_HOME:-/srv/dsjobs}"
+if [ -d "${DSJOBS_HOME}" ]; then
+  chmod 777 "${DSJOBS_HOME}" 2>/dev/null || true
+fi
+# dsJobs staging may be at /var/lib/dsjobs (fallback) -- ensure writable
+mkdir -p /var/lib/dsjobs 2>/dev/null && chmod 777 /var/lib/dsjobs 2>/dev/null || true
+
+# Models dir for TotalSegmentator weights
+mkdir -p "${VENV_ROOT}/../models" 2>/dev/null && chmod -R 755 "${VENV_ROOT}/../models" 2>/dev/null || true
+
+# Rock user home for TotalSegmentator weights download
+ROCK_HOME="$(getent passwd rock 2>/dev/null | cut -d: -f6 || echo /var/lib/rock)"
+if [ -n "${ROCK_HOME}" ]; then
+  mkdir -p "${ROCK_HOME}/.totalsegmentator" 2>/dev/null || true
+  chown -R rock:rock "${ROCK_HOME}/.totalsegmentator" 2>/dev/null || true
+fi
+
+# Ensure Python executables are accessible by rock user
+chmod -R 755 "${VENV_ROOT}" 2>/dev/null || true
+
 exit 0
